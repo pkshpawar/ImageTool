@@ -128,7 +128,7 @@ fun App(a: Activity) {
             CropScreen(a, b, { pick.launch("image/*") }, { crop = false }) {
                 bmp = it; ob = encode(it, "JPEG", 95).size; crop = false
             }
-        } else ResizerScreen(a, b, ob, { pick.launch("image/*") }, { if (b != null) crop = true else Toast.makeText(a, "Upload an image first", Toast.LENGTH_SHORT).show() }, { a.finish() })
+        } else ResizerScreen(a, b, ob, { pick.launch("image/*") }, { if (b != null) { crop = true } else { Toast.makeText(a, "Upload an image first", Toast.LENGTH_SHORT).show() } }, { a.finish() })
     }
 }
 
@@ -218,7 +218,7 @@ fun ResizerScreen(ctx: Context, bmp: Bitmap?, origBytes: Int, onPick: () -> Unit
             }
         }
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("JPEG", "PNG", "JPG", "PDF").forEach { FilterChip(fmt == it, { _ -> fmt = it }, { Text(if (it == "JPEG") "JPEG (default)" else it) }) }
+            listOf("JPEG", "PNG", "JPG", "PDF").forEach { f -> FilterChip(fmt == f, { fmt = f }, { Text(if (f == "JPEG") "JPEG (default)" else f) }) }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button({
