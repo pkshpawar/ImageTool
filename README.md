@@ -14,5 +14,7 @@ Or open the folder in Android Studio and press Run.
 - Manual dimension: L, H (px) or %, with aspect-ratio lock
 - Quality bar + DPI; quick presets 20/50/100/200/500 KB; "Compress to KB" button next to the quality bar
 - Original vs Resized preview with file sizes
-- Output: JPEG (default), PNG, JPG, PDF -> saved in Downloads/ImageTool
+- Output: JPEG (default), PNG, JPG, PDF -> saved in Download folder
 - Crop: blurred outside area, crop box with 8 handles (every corner and edge), pinch to zoom/pan/rotate, free-angle rotation slider, Passport/ID size presets
+
+- Crop uses 4 independent corner points (perspective crop) and warps to the chosen output size: Mini 2x3, Wallet 2.5x3.5, Mini Wallet 1.75x2.5, Everyday 4x6, Medium 5x7, Display 1 8x10, Display 2 8x12 (inches, 300 dpi)

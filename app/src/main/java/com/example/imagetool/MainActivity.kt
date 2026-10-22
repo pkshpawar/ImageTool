@@ -29,7 +29,9 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.withTransform
@@ -97,7 +99,7 @@ fun save(ctx: Context, bmp: Bitmap, fmt: String, q: Int, dpi: Float) {
     val v = ContentValues().apply {
         put(MediaStore.Downloads.DISPLAY_NAME, "image_${System.currentTimeMillis()}.$ext")
         put(MediaStore.Downloads.MIME_TYPE, mime)
-        put(MediaStore.Downloads.RELATIVE_PATH, "Download/ImageTool")
+        put(MediaStore.Downloads.RELATIVE_PATH, "Download")
     }
     val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v)!!
     ctx.contentResolver.openOutputStream(uri)!!.use { os ->
@@ -110,7 +112,7 @@ fun save(ctx: Context, bmp: Bitmap, fmt: String, q: Int, dpi: Float) {
             pdf.finishPage(page); pdf.writeTo(os); pdf.close()
         } else os.write(encode(bmp, fmt, q))
     }
-    Toast.makeText(ctx, "Saved to Downloads/ImageTool", Toast.LENGTH_LONG).show()
+    Toast.makeText(ctx, "Saved to Download folder", Toast.LENGTH_LONG).show()
 }
 
 // ---------- app shell ----------
@@ -191,6 +193,10 @@ fun ResizerScreen(ctx: Context, bmp: Bitmap?, origBytes: Int, onPick: () -> Unit
             }
             else -> Num("Percent %", pct, Modifier.fillMaxWidth()) { pct = it }
         }
+        bmp?.let {
+            Text("Input size: Height ${it.height} px x Length ${it.width} px  (${String.format("%.0f", it.height / d * 25.4f)} x ${String.format("%.0f", it.width / d * 25.4f)} mm @ ${d.roundToInt()} dpi)",
+                style = MaterialTheme.typography.labelLarge)
+        }
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             listOf(20, 50, 100, 200, 500).forEach { OutlinedButton({ kb = it.toString() }) { Text("$it KB") } }
         }
@@ -231,32 +237,14 @@ fun ResizerScreen(ctx: Context, bmp: Bitmap?, origBytes: Int, onPick: () -> Unit
     }
 }
 
-// ---------- Crop ----------
-data class Preset(val name: String, val w: Float?, val h: Float?)
-val presets = listOf(Preset("Free", null, null), Preset("Passport 35x45", 35f, 45f), Preset("US Passport 51x51", 51f, 51f),
-    Preset("ID 25x30", 25f, 30f), Preset("ID card 86x54", 86f, 54f))
-
-fun Int.has(f: Int) = (this and f) != 0
-
-fun hit(p: Offset, r: Rect, t: Float): Int {   // 1=L 2=T 4=R 8=B ; two bits = corner
-    var m = 0
-    val inY = p.y in (r.top - t)..(r.bottom + t); val inX = p.x in (r.left - t)..(r.right + t)
-    if (inY && abs(p.x - r.left) < t) m = m or 1
-    if (inY && abs(p.x - r.right) < t) m = m or 4
-    if (inX && abs(p.y - r.top) < t) m = m or 2
-    if (inX && abs(p.y - r.bottom) < t) m = m or 8
-    return m
-}
-
-fun moveBox(r: Rect, m: Int, d: Offset, ratio: Float?, min: Float, bounds: IntSize): Rect {
-    var l = r.left; var t = r.top; var rt = r.right; var b = r.bottom
-    if (m.has(1)) l = (l + d.x).coerceIn(0f, rt - min)
-    if (m.has(4)) rt = (rt + d.x).coerceIn(l + min, bounds.width.toFloat())
-    if (m.has(2)) t = (t + d.y).coerceIn(0f, b - min)
-    if (m.has(8)) b = (b + d.y).coerceIn(t + min, bounds.height.toFloat())
-    if (ratio != null) { val h = (rt - l) / ratio; if (m.has(2) && !m.has(8)) t = b - h else b = t + h }
-    return Rect(l, t, rt, b)
-}
+// ---------- Crop (4-corner perspective crop) ----------
+data class Preset(val name: String, val w: Float?, val h: Float?)   // size in inches
+val presets = listOf(
+    Preset("Free", null, null),
+    Preset("Passport 35x45mm", 35f / 25.4f, 45f / 25.4f),
+    Preset("Mini 2x3", 2f, 3f), Preset("Wallet 2.5x3.5", 2.5f, 3.5f),
+    Preset("Mini Wallet 1.75x2.5", 1.75f, 2.5f), Preset("Everyday 4x6", 4f, 6f),
+    Preset("Medium 5x7", 5f, 7f), Preset("Display 1 8x10", 8f, 10f), Preset("Display 2 8x12", 8f, 12f))
 
 @Composable
 fun Layer(img: Bitmap, s: Float, off: Offset, rot: Float, mod: Modifier) {
@@ -276,38 +264,47 @@ fun CropScreen(ctx: Context, bmp: Bitmap, onPick: () -> Unit, onBack: () -> Unit
     var zoom by remember { mutableFloatStateOf(1f) }
     var off by remember { mutableStateOf(Offset.Zero) }
     var rot by remember { mutableFloatStateOf(0f) }
-    var box by remember { mutableStateOf(Rect.Zero) }
+    var quad by remember { mutableStateOf(listOf<Offset>()) }   // TL, TR, BR, BL in screen coords
     var preset by remember { mutableStateOf(presets[0]) }
-    val ratio = if (preset.w != null) preset.w!! / preset.h!! else null
+    var land by remember { mutableStateOf(false) }
     val fit = if (size.width == 0) 1f else min(size.width / bmp.width.toFloat(), size.height / bmp.height.toFloat())
     val s = fit * zoom
 
-    LaunchedEffect(size) { if (size.width > 0 && box == Rect.Zero) box = Rect(size.width * .15f, size.height * .15f, size.width * .85f, size.height * .85f) }
+    LaunchedEffect(size) {
+        if (size.width > 0 && quad.isEmpty()) {
+            val w = size.width.toFloat(); val h = size.height.toFloat()
+            quad = listOf(Offset(w * .2f, h * .15f), Offset(w * .8f, h * .15f), Offset(w * .8f, h * .85f), Offset(w * .2f, h * .85f))
+        }
+    }
 
-    fun applyPreset(p: Preset) {
-        preset = p
-        if (p.w == null || size.width == 0) return
-        val r = p.w / p.h!!
-        var h = size.height * 0.7f; var w = h * r
-        if (w > size.width * 0.9f) { w = size.width * 0.9f; h = w / r }
-        val cx = size.width / 2f; val cy = size.height / 2f
-        box = Rect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+    fun outDims(): Pair<Int, Int> {
+        val p = preset
+        if (p.w != null) {   // 300 dpi
+            var w = (p.w * 300).roundToInt(); var h = (p.h!! * 300).roundToInt()
+            if (land) { val t = w; w = h; h = t }
+            return Pair(w, h)
+        }
+        if (quad.size < 4) return Pair(1, 1)
+        fun d(a: Offset, b: Offset) = (a - b).getDistance() / s
+        val w = ((d(quad[0], quad[1]) + d(quad[3], quad[2])) / 2).roundToInt().coerceIn(1, 6000)
+        val h = ((d(quad[0], quad[3]) + d(quad[1], quad[2])) / 2).roundToInt().coerceIn(1, 6000)
+        return Pair(w, h)
     }
 
     fun makeCrop(): Bitmap {
-        val b = box
-        var w = (b.width / s).toInt().coerceIn(1, 6000); var h = (b.height / s).toInt().coerceIn(1, 6000)
+        val fwd = Matrix()
+        fwd.postTranslate(-bmp.width / 2f, -bmp.height / 2f); fwd.postRotate(rot); fwd.postScale(s, s)
+        fwd.postTranslate(size.width / 2f + off.x, size.height / 2f + off.y)
+        val inv = Matrix(); fwd.invert(inv)
+        val src = FloatArray(8)
+        quad.forEachIndexed { i, p -> src[i * 2] = p.x; src[i * 2 + 1] = p.y }
+        inv.mapPoints(src)                                   // corners in bitmap coordinates
+        val (w, h) = outDims()
+        val dst = floatArrayOf(0f, 0f, w.toFloat(), 0f, w.toFloat(), h.toFloat(), 0f, h.toFloat())
+        val pm = Matrix(); pm.setPolyToPoly(src, 0, dst, 0, 4)   // perspective warp quad -> rectangle
         val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val c = android.graphics.Canvas(out); c.drawColor(android.graphics.Color.WHITE)
-        val m = Matrix()
-        m.postTranslate(-bmp.width / 2f, -bmp.height / 2f); m.postRotate(rot); m.postScale(s, s)
-        m.postTranslate(size.width / 2f + off.x, size.height / 2f + off.y)
-        m.postTranslate(-b.left, -b.top); m.postScale(1 / s, 1 / s)
-        c.drawBitmap(bmp, m, Paint(Paint.FILTER_BITMAP_FLAG))
-        if (preset.w != null) {   // exact passport / ID size at 300 dpi
-            w = (preset.w!! * 300 / 25.4f).roundToInt(); h = (preset.h!! * 300 / 25.4f).roundToInt()
-            return Bitmap.createScaledBitmap(out, w, h, true)
-        }
+        c.drawBitmap(bmp, pm, Paint(Paint.FILTER_BITMAP_FLAG))
         return out
     }
 
@@ -316,20 +313,32 @@ fun CropScreen(ctx: Context, bmp: Bitmap, onPick: () -> Unit, onBack: () -> Unit
             OutlinedButton(onBack) { Text("Back") }
             Button(onPick) { Text("Upload Image") }
         }
-        Text("Output size", style = MaterialTheme.typography.labelLarge)
+        Text("Input size: Height ${bmp.height} px x Length ${bmp.width} px", style = MaterialTheme.typography.labelLarge)
+        Text("Output size (inch)", style = MaterialTheme.typography.labelLarge)
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            presets.forEach { p -> FilterChip(preset == p, { applyPreset(p) }, { Text(p.name) }) }
+            presets.forEach { p -> FilterChip(preset == p, { preset = p }, { Text(p.name) }) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            FilterChip(land, { land = !land }, { Text("Swap H / L") })
+            val (ow, oh) = outDims()
+            Text("Output: $ow x $oh px")
         }
         Box(Modifier.fillMaxWidth().weight(1f).background(androidx.compose.ui.graphics.Color.Black)
             .onSizeChanged { size = it }
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    val m = hit(down.position, box, 56f)
+                    val idx = quad.indices.minByOrNull { (quad[it] - down.position).getDistance() }
+                        ?.takeIf { (quad[it] - down.position).getDistance() < 90f }
                     do {
                         val ev = awaitPointerEvent()
-                        if (m != 0) {
-                            if (ev.changes.size == 1) box = moveBox(box, m, ev.changes[0].positionChange(), ratio, 100f, size)
+                        if (idx != null) {
+                            if (ev.changes.size == 1) {
+                                val np = quad[idx] + ev.changes[0].positionChange()
+                                quad = quad.toMutableList().also { l ->
+                                    l[idx] = Offset(np.x.coerceIn(0f, size.width.toFloat()), np.y.coerceIn(0f, size.height.toFloat()))
+                                }
+                            }
                         } else {
                             zoom = (zoom * ev.calculateZoom()).coerceIn(0.3f, 10f)
                             off += ev.calculatePan()
@@ -339,28 +348,30 @@ fun CropScreen(ctx: Context, bmp: Bitmap, onPick: () -> Unit, onBack: () -> Unit
                     } while (ev.changes.any { it.pressed })
                 }
             }) {
-            Layer(bmp, s, off, rot, Modifier.fillMaxSize().blur(12.dp))                      // blurred outside area
+            Layer(bmp, s, off, rot, Modifier.fillMaxSize().blur(12.dp))                  // blurred outside
             Canvas(Modifier.fillMaxSize()) { drawRect(CColor(0x88000000)) }
-            Box(Modifier.fillMaxSize().drawWithContent { clipRect(box.left, box.top, box.right, box.bottom) { this@drawWithContent.drawContent() } }) {
-                Layer(bmp, s, off, rot, Modifier.fillMaxSize())                              // sharp inside crop box
-            }
-            Canvas(Modifier.fillMaxSize()) {
-                val b = box
-                drawRect(CColor.White, b.topLeft, b.size, style = Stroke(3f))
-                for (i in 1..2) {
-                    drawLine(CColor(0x88FFFFFF), Offset(b.left + b.width * i / 3, b.top), Offset(b.left + b.width * i / 3, b.bottom))
-                    drawLine(CColor(0x88FFFFFF), Offset(b.left, b.top + b.height * i / 3), Offset(b.right, b.top + b.height * i / 3))
+            Box(Modifier.fillMaxSize().drawWithContent {                                 // sharp inside quad
+                if (quad.size == 4) {
+                    val path = Path().apply {
+                        moveTo(quad[0].x, quad[0].y); lineTo(quad[1].x, quad[1].y)
+                        lineTo(quad[2].x, quad[2].y); lineTo(quad[3].x, quad[3].y); close()
+                    }
+                    clipPath(path) { this@drawWithContent.drawContent() }
                 }
-                listOf(b.topLeft, b.topCenter, b.topRight, b.centerLeft, b.centerRight, b.bottomLeft, b.bottomCenter, b.bottomRight)
-                    .forEach { drawCircle(CColor(0xFF1E88E5), 16f, it); drawCircle(CColor.White, 16f, it, style = Stroke(3f)) }
+            }) { Layer(bmp, s, off, rot, Modifier.fillMaxSize()) }
+            Canvas(Modifier.fillMaxSize()) {
+                if (quad.size == 4) {
+                    for (i in 0..3) drawLine(CColor.White, quad[i], quad[(i + 1) % 4], strokeWidth = 4f)
+                    quad.forEach { drawCircle(CColor(0xFF1E88E5), 22f, it); drawCircle(CColor.White, 22f, it, style = Stroke(4f)) }
+                }
             }
         }
-        Text("Rotate: ${rot.roundToInt()}°  |  pinch = zoom/rotate, drag handles = crop")
+        Text("Drag each corner separately. Two fingers = zoom / pan / rotate image. Rotate: ${rot.roundToInt()}°")
         Slider(rot, { rot = it }, valueRange = -180f..180f)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button({ onUse(makeCrop()) }) { Text("Crop & Use in Resizer") }
+            Button({ if (quad.size == 4) onUse(makeCrop()) }) { Text("Crop & Use in Resizer") }
             OutlinedButton({
-                try { save(ctx, makeCrop(), "JPEG", 95, 300f) } catch (e: Exception) { Toast.makeText(ctx, "Save failed", Toast.LENGTH_LONG).show() }
+                try { if (quad.size == 4) save(ctx, makeCrop(), "JPEG", 95, 300f) } catch (e: Exception) { Toast.makeText(ctx, "Save failed: ${e.message}", Toast.LENGTH_LONG).show() }
             }) { Text("Save") }
         }
     }
