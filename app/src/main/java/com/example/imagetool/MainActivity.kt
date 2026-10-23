@@ -48,6 +48,7 @@ import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -59,6 +60,8 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -80,6 +83,7 @@ val papers = listOf(
     Paper("Smart Card 85.6x54mm", 85.6f, 54f), Paper("4x6 in", 101.6f, 152.4f), Paper("5x7 in", 127f, 177.8f), Paper("8x10 in", 203.2f, 254f))
 val bgOptions = listOf("White" to 0xFFFFFFFF.toInt(), "Gray" to 0xFFBDBDBD.toInt(), "Black" to 0xFF000000.toInt(), "Blue" to 0xFF1E88E5.toInt())
 
+fun stamp(): String = "pksh_" + SimpleDateFormat("ddMMyyyyHHmmss", Locale.US).format(Date())
 fun f1(x: Float): String = String.format(Locale.US, "%.1f", x)
 fun toast(ctx: Context, s: String) = Toast.makeText(ctx, s, Toast.LENGTH_SHORT).show()
 
@@ -116,10 +120,13 @@ fun smoothScale(src: Bitmap, w: Int, h: Int, pro: Boolean): Bitmap {
     return Bitmap.createScaledBitmap(cur, w, h, true)
 }
 
-/** Normal = stretch. Professional = keep aspect ratio; fit=true puts it on a paper of tw x th, fit=false returns only the image. */
-fun render(src: Bitmap, tw: Int, th: Int, pro: Boolean, fit: Boolean, bg: Int): Bitmap {
-    if (!pro) return Bitmap.createScaledBitmap(src, tw, th, true)
-    val k = min(tw / src.width.toFloat(), th / src.height.toFloat())
+/** Normal = stretch. Professional = keep aspect ratio; fit=true puts it on a paper of tw x th, fit=false returns only the image. pct = image size %. */
+fun render(src: Bitmap, tw: Int, th: Int, pro: Boolean, fit: Boolean, bg: Int, pct: Float): Bitmap {
+    val f = pct / 100f
+    if (!pro) return Bitmap.createScaledBitmap(src, (tw * f).roundToInt().coerceIn(1, 6000), (th * f).roundToInt().coerceIn(1, 6000), true)
+    var k = min(tw / src.width.toFloat(), th / src.height.toFloat()) * f
+    val big = max(src.width, src.height) * k
+    if (big > 6000f) k *= 6000f / big
     val iw = (src.width * k).roundToInt().coerceAtLeast(1)
     val ih = (src.height * k).roundToInt().coerceAtLeast(1)
     val img = smoothScale(src, iw, ih, true)
@@ -144,7 +151,7 @@ fun openDownload(ctx: Context, name: String, mime: String): OutputStream {
 fun save(ctx: Context, bmp: Bitmap, fmt: String, q: Int, dpi: Float) {
     val ext = when (fmt) { "PNG" -> "png"; "PDF" -> "pdf"; "JPG" -> "jpg"; else -> "jpeg" }
     val mime = when (fmt) { "PNG" -> "image/png"; "PDF" -> "application/pdf"; else -> "image/jpeg" }
-    openDownload(ctx, "image_${System.currentTimeMillis()}.$ext", mime).use { os ->
+    openDownload(ctx, "${stamp()}.$ext", mime).use { os ->
         if (fmt == "PDF") {
             val pw = (bmp.width / dpi * 72).roundToInt().coerceAtLeast(1)
             val ph = (bmp.height / dpi * 72).roundToInt().coerceAtLeast(1)
@@ -173,7 +180,7 @@ fun imagesToPdf(ctx: Context, uris: List<Uri>, a4: Boolean) {
         } else c.drawBitmap(b, null, android.graphics.Rect(0, 0, pw, ph), paint)
         pdf.finishPage(page)
     }
-    openDownload(ctx, "images_${System.currentTimeMillis()}.pdf", "application/pdf").use { pdf.writeTo(it) }
+    openDownload(ctx, "${stamp()}.pdf", "application/pdf").use { pdf.writeTo(it) }
     pdf.close()
 }
 
@@ -215,18 +222,17 @@ fun PreviewBox(bm: Bitmap?) {
 
 // ---------- state holders (kept when you press Back) ----------
 class RS {
-    var mode by mutableIntStateOf(0)
+    var unitPx by mutableStateOf(false)
     var wMm by mutableStateOf("210"); var hMm by mutableStateOf("297")   // A4 default
+    var wPx by mutableStateOf("2480"); var hPx by mutableStateOf("3508")
     var dpi by mutableStateOf("300")
-    var wPx by mutableStateOf(""); var hPx by mutableStateOf(""); var pct by mutableStateOf("100")
-    var lock by mutableStateOf(true)
+    var pct by mutableFloatStateOf(100f); var pctTxt by mutableStateOf("100")
     var q by mutableFloatStateOf(90f); var kb by mutableStateOf("")
     var fmt by mutableStateOf("JPEG")
     var pro by mutableStateOf(true); var fit by mutableStateOf(true)
     var bg by mutableIntStateOf(0xFFFFFFFF.toInt())
     var cSig by mutableStateOf(""); var cScale by mutableFloatStateOf(1f)
     var res by mutableStateOf<Pair<Bitmap, Int>?>(null)
-    var forBmp: Bitmap? = null
 }
 
 class CS {
@@ -294,12 +300,14 @@ fun renderMerged(bmps: List<Bitmap>, rects: List<Rect>, pw: Float, ph: Float, bg
 fun App(a: Activity) {
     var bmp by remember { mutableStateOf<Bitmap?>(null) }
     var ob by remember { mutableIntStateOf(0) }
+    var orig by remember { mutableStateOf<Bitmap?>(null) }      // first inserted image (for Reset)
+    var origOb by remember { mutableIntStateOf(0) }
     var screen by remember { mutableStateOf("resize") }
     var cs by remember { mutableStateOf(CS()) }
-    val rs = remember { RS() }; val ms = remember { MS() }; val ps = remember { PS() }
+    var rs by remember { mutableStateOf(RS()) }; var ms by remember { mutableStateOf(MS()) }; var ps by remember { mutableStateOf(PS()) }
     val scope = rememberCoroutineScope()
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri?.let { u -> load(a, u)?.let { (b, n) -> bmp = b; ob = n; cs = CS() } }
+        uri?.let { u -> load(a, u)?.let { (b, n) -> bmp = b; ob = n; orig = b; origOb = n; cs = CS() } }
     }
     val pickMerge = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         if (uris.isNotEmpty()) scope.launch {
@@ -325,25 +333,30 @@ fun App(a: Activity) {
             else -> ResizerScreen(a, rs, b, ob, { pick.launch("image/*") },
                 { if (b != null) { screen = "crop" } else { toast(a, "Upload an image first") } },
                 { screen = "merge" }, { screen = "pdf" },
+                {
+                    val o = orig
+                    if (o != null) { bmp = o; ob = origOb; cs = CS(); toast(a, "Image reset to original") } else { toast(a, "No image") }
+                },
+                {
+                    bmp = null; orig = null; ob = 0; origOb = 0
+                    cs = CS(); rs = RS(); ms = MS(); ps = PS()
+                    toast(a, "Cleared")
+                },
                 { a.finishAndRemoveTask() })   // Exit = close and clear the app
         }
     }
 }
 
 // ---------- Resizer ----------
-fun targetDims(st: RS, b: Bitmap, scale: Float): Pair<Int, Int> {
+fun paperPx(st: RS): Pair<Float, Float> {
     val d = st.dpi.toFloatOrNull()?.coerceAtLeast(1f) ?: 300f
-    val (w, h) = when (st.mode) {
-        0 -> Pair((st.wMm.toFloatOrNull() ?: 210f) * d / 25.4f, (st.hMm.toFloatOrNull() ?: 297f) * d / 25.4f)
-        1 -> Pair(st.wPx.toFloatOrNull() ?: b.width.toFloat(), st.hPx.toFloatOrNull() ?: b.height.toFloat())
-        else -> { val p = (st.pct.toFloatOrNull() ?: 100f) / 100f; Pair(b.width * p, b.height * p) }
-    }
-    return Pair((w * scale).roundToInt().coerceIn(1, 5000), (h * scale).roundToInt().coerceIn(1, 5000))
+    return if (st.unitPx) Pair(st.wPx.toFloatOrNull() ?: 2480f, st.hPx.toFloatOrNull() ?: 3508f)
+    else Pair((st.wMm.toFloatOrNull() ?: 210f) * d / 25.4f, (st.hMm.toFloatOrNull() ?: 297f) * d / 25.4f)
 }
 
 fun renderRes(st: RS, b: Bitmap, scale: Float): Bitmap {
-    val (w, h) = targetDims(st, b, scale)
-    return if (st.mode == 2) smoothScale(b, w, h, st.pro) else render(b, w, h, st.pro, st.fit, st.bg)
+    val (w, h) = paperPx(st)
+    return render(b, (w * scale).roundToInt().coerceIn(1, 5000), (h * scale).roundToInt().coerceIn(1, 5000), st.pro, st.fit, st.bg, st.pct)
 }
 
 /** Lowers quality (down to 30), then shrinks pixels, until the file is <= maxBytes. */
@@ -364,18 +377,29 @@ fun compressFit(st: RS, b: Bitmap, maxBytes: Int): Triple<Int, Float, Int> {
 
 @Composable
 fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: () -> Unit, onCrop: () -> Unit,
-                  onMerge: () -> Unit, onPdf: () -> Unit, onExit: () -> Unit) {
+                  onMerge: () -> Unit, onPdf: () -> Unit, onReset: () -> Unit, onClear: () -> Unit, onExit: () -> Unit) {
     val scope = rememberCoroutineScope()
     val d = st.dpi.toFloatOrNull()?.coerceAtLeast(1f) ?: 300f
-    if (bmp != null && st.forBmp !== bmp) { st.forBmp = bmp; st.wPx = bmp.width.toString(); st.hPx = bmp.height.toString(); st.cSig = "" }
 
-    val sig = "${st.mode}|${st.wMm}|${st.hMm}|${st.dpi}|${st.wPx}|${st.hPx}|${st.pct}|${st.pro}|${st.fit}|${st.bg}|${System.identityHashCode(bmp)}"
+    val sig = "${st.unitPx}|${st.wMm}|${st.hMm}|${st.wPx}|${st.hPx}|${st.dpi}|${st.pct}|${st.pro}|${st.fit}|${st.bg}|${System.identityHashCode(bmp)}"
     val eff = if (st.cSig == sig) st.cScale else 1f
     LaunchedEffect(sig, eff, st.q, st.fmt) {
         val b = bmp
         if (b == null) { st.res = null; return@LaunchedEffect }
         st.res = withContext(Dispatchers.Default) { val bm = renderRes(st, b, eff); Pair(bm, encode(bm, st.fmt, st.q.toInt()).size) }
     }
+
+    fun setMm(w: Float, h: Float) {
+        st.wMm = f1(w).removeSuffix(".0"); st.hMm = f1(h).removeSuffix(".0")
+        st.wPx = (w * d / 25.4f).roundToInt().toString(); st.hPx = (h * d / 25.4f).roundToInt().toString()
+    }
+    fun toggleUnit() {
+        if (!st.unitPx) { st.wPx = ((st.wMm.toFloatOrNull() ?: 210f) * d / 25.4f).roundToInt().toString(); st.hPx = ((st.hMm.toFloatOrNull() ?: 297f) * d / 25.4f).roundToInt().toString() }
+        else { st.wMm = f1((st.wPx.toFloatOrNull() ?: 2480f) * 25.4f / d).removeSuffix(".0"); st.hMm = f1((st.hPx.toFloatOrNull() ?: 3508f) * 25.4f / d).removeSuffix(".0") }
+        st.unitPx = !st.unitPx
+    }
+    val (pwPx, phPx) = paperPx(st)
+    fun mmOf(px: Float) = f1(px / d * 25.4f)
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Image Resizer", style = MaterialTheme.typography.titleMedium)
@@ -385,39 +409,46 @@ fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: ()
             Btn("Merge", false) { onMerge() }
             Btn("Images to PDF", false) { onPdf() }
         }
-        HRow { listOf("Size mm", "Manual px", "Percent").forEachIndexed { i, s -> Chip(s, st.mode == i) { st.mode = i } } }
-        if (st.mode == 0) {
-            HRow { papers.forEach { p -> Chip(p.name, false) { st.mode = 0; st.wMm = f1(p.w).removeSuffix(".0"); st.hMm = f1(p.h).removeSuffix(".0") } } }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Num("Height mm", st.hMm, Modifier.weight(1f)) { st.hMm = it }
-                Num("Length mm", st.wMm, Modifier.weight(1f)) { st.wMm = it }
-            }
-            Text("Output: ${((st.hMm.toFloatOrNull() ?: 0f) * d / 25.4f).roundToInt()} x ${((st.wMm.toFloatOrNull() ?: 0f) * d / 25.4f).roundToInt()} px (H x L)", fontSize = 11.sp)
-        } else if (st.mode == 1) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Num("L (px)", st.wPx, Modifier.weight(1f)) { st.wPx = it; val b = bmp
-                    if (st.lock && b != null) it.toFloatOrNull()?.let { x -> st.hPx = (x * b.height / b.width).roundToInt().toString() } }
-                Num("H (px)", st.hPx, Modifier.weight(1f)) { st.hPx = it; val b = bmp
-                    if (st.lock && b != null) it.toFloatOrNull()?.let { x -> st.wPx = (x * b.width / b.height).roundToInt().toString() } }
-                Checkbox(st.lock, { st.lock = it }); Text("Aspect", fontSize = 11.sp)
-            }
-        } else Num("Percent %", st.pct, Modifier.fillMaxWidth()) { st.pct = it }
+        HRow {
+            Btn("Reset Image", false) { onReset() }
+            Btn("Clear Image", false) { onClear() }
+        }
 
-        if (st.mode != 2) {
-            HRow {
-                Chip("Professional resize", st.pro) { st.pro = true }
-                Chip("Normal (stretch)", !st.pro) { st.pro = false }
-                Chip("Fit to paper", st.fit) { st.fit = true }
-                Chip("Resize only image", !st.fit) { st.fit = false }
+        // ----- size box: shows mm and px together; one button switches the input unit -----
+        Column(Modifier.fillMaxWidth().border(1.dp, CColor.Gray, RoundedCornerShape(8.dp)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Required size (H x L)", style = MaterialTheme.typography.labelLarge)
+            HRow { papers.forEach { p -> Chip(p.name, false) { setMm(p.w, p.h) } } }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Num(if (st.unitPx) "Height px" else "Height mm", if (st.unitPx) st.hPx else st.hMm, Modifier.weight(1f)) { if (st.unitPx) st.hPx = it else st.hMm = it }
+                Num(if (st.unitPx) "Length px" else "Length mm", if (st.unitPx) st.wPx else st.wMm, Modifier.weight(1f)) { if (st.unitPx) st.wPx = it else st.wMm = it }
+                Btn("mm / px", false) { toggleUnit() }
             }
-            if (st.pro && st.fit) HRow {
-                Text("Paper:", fontSize = 11.sp)
-                bgOptions.forEach { (n, c) -> Chip(n, st.bg == c) { st.bg = c } }
-            }
-        } else HRow { Chip("Professional", st.pro) { st.pro = true }; Chip("Normal", !st.pro) { st.pro = false } }
+            Text("H ${mmOf(phPx)} mm (${phPx.roundToInt()} px)   x   L ${mmOf(pwPx)} mm (${pwPx.roundToInt()} px)   @ ${d.roundToInt()} dpi", fontSize = 11.sp)
+            Num("DPI", st.dpi, Modifier.width(110.dp)) { st.dpi = it }
+        }
+
+        HRow {
+            Chip("Professional resize", st.pro) { st.pro = true }
+            Chip("Normal (stretch)", !st.pro) { st.pro = false }
+            Chip("On paper", st.fit) { st.fit = true }
+            Chip("Image only", !st.fit) { st.fit = false }
+        }
+        if (st.pro && st.fit) HRow {
+            Text("Paper:", fontSize = 11.sp)
+            bgOptions.forEach { (n, c) -> Chip(n, st.bg == c) { st.bg = c } }
+        }
+
+        // ----- image size bar + number -----
+        Text("Image size (manual fix)", style = MaterialTheme.typography.labelLarge)
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Btn("Fit") { st.pct = 100f; st.pctTxt = "100" }
+            Slider(st.pct.coerceIn(10f, 200f), { st.pct = it.roundToInt().toFloat(); st.pctTxt = st.pct.roundToInt().toString() },
+                Modifier.weight(1f), valueRange = 10f..200f)
+            Num("%", st.pctTxt, Modifier.width(84.dp)) { t -> st.pctTxt = t; t.toFloatOrNull()?.let { st.pct = it.coerceIn(1f, 400f) } }
+        }
 
         bmp?.let {
-            Text("Input size: Height ${it.height} px x Length ${it.width} px  (${f1(it.height / d * 25.4f)} x ${f1(it.width / d * 25.4f)} mm @ ${d.roundToInt()} dpi)",
+            Text("Input size: Height ${it.height} px x Length ${it.width} px  (${mmOf(it.height.toFloat())} x ${mmOf(it.width.toFloat())} mm)",
                 style = MaterialTheme.typography.labelLarge)
         }
         HRow { listOf(20, 50, 100, 200, 500).forEach { Chip("$it KB", st.kb == it.toString()) { st.kb = it.toString() } } }
@@ -425,7 +456,6 @@ fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: ()
         Slider(st.q, { st.q = it }, valueRange = 1f..100f)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Num("Target KB", st.kb, Modifier.weight(1f)) { st.kb = it }
-            Num("DPI", st.dpi, Modifier.weight(1f)) { st.dpi = it }
             Btn("Compress") {
                 val b = bmp ?: return@Btn
                 val target = (st.kb.toIntOrNull() ?: max(1, origBytes / 2048)).coerceAtLeast(1)   // blank = 50% of original
@@ -441,12 +471,14 @@ fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: ()
             Column(Modifier.weight(1f)) {
                 Text("Before (original)", style = MaterialTheme.typography.labelMedium)
                 PreviewBox(bmp)
-                Text("${bmp?.width ?: 0} x ${bmp?.height ?: 0} px\n${f1(origBytes / 1024f)} KB", fontSize = 11.sp)
+                val w = bmp?.width ?: 0; val h = bmp?.height ?: 0
+                Text("H $h x L $w px\nH ${mmOf(h.toFloat())} x L ${mmOf(w.toFloat())} mm\n${f1(origBytes / 1024f)} KB", fontSize = 11.sp)
             }
             Column(Modifier.weight(1f)) {
                 Text("After (required)", style = MaterialTheme.typography.labelMedium)
                 PreviewBox(st.res?.first)
-                Text("${st.res?.first?.width ?: 0} x ${st.res?.first?.height ?: 0} px\n${f1((st.res?.second ?: 0) / 1024f)} KB", fontSize = 11.sp)
+                val w = st.res?.first?.width ?: 0; val h = st.res?.first?.height ?: 0
+                Text("H $h x L $w px\nH ${mmOf(h.toFloat())} x L ${mmOf(w.toFloat())} mm\n${f1((st.res?.second ?: 0) / 1024f)} KB", fontSize = 11.sp)
             }
         }
         HRow { listOf("JPEG", "PNG", "JPG", "PDF").forEach { f -> Chip(if (f == "JPEG") "JPEG (default)" else f, st.fmt == f) { st.fmt = f } } }
@@ -461,6 +493,7 @@ fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: ()
             }
             Btn("Exit", false) { onExit() }
         }
+        Text("@Prakash Pawar  Ver 1.0", Modifier.fillMaxWidth().padding(top = 8.dp), fontSize = 11.sp, color = CColor.Gray, textAlign = TextAlign.Center)
     }
 }
 
