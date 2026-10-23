@@ -18,3 +18,10 @@ Or open the folder in Android Studio and press Run.
 - Crop: blurred outside area, crop box with 8 handles (every corner and edge), pinch to zoom/pan/rotate, free-angle rotation slider, Passport/ID size presets
 
 - Crop uses 4 independent corner points (perspective crop) and warps to the chosen output size: Mini 2x3, Wallet 2.5x3.5, Mini Wallet 1.75x2.5, Everyday 4x6, Medium 5x7, Display 1 8x10, Display 2 8x12 (inches, 300 dpi)
+
+## v3 changes
+- Exit closes and clears the app; Back keeps everything (Back on main screen sends app to background)
+- Resize: Professional (keeps aspect ratio, high quality) or Normal (stretch); Fit to paper / Resize only image; paper colour (White default)
+- Compress now always reduces file size (quality first, then pixels). Blank target = 50% of original
+- Smart Card size; crop shows a rectangle normally and a free-transform quad when "Free" is chosen
+- Merge several images on one paper (Auto or Manual) and Images-to-PDF, both saved to Download
