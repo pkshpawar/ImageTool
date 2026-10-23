@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -47,6 +48,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -196,8 +198,8 @@ fun Btn(t: String, primary: Boolean = true, enabled: Boolean = true, onClick: ()
 fun Chip(t: String, sel: Boolean, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.clickable(onClick = onClick), shape = RoundedCornerShape(6.dp),
-        color = if (sel) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-        border = if (sel) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null
+        color = if (sel) MaterialTheme.colorScheme.primaryContainer else CColor.White,
+        border = BorderStroke(1.dp, if (sel) MaterialTheme.colorScheme.primary else CColor(0xFFBDBDBD))
     ) { Text(t, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) }
 }
 
@@ -206,9 +208,23 @@ fun HRow(content: @Composable RowScope.() -> Unit) =
     Row(Modifier.horizontalScroll(rememberScrollState()), Arrangement.spacedBy(5.dp), Alignment.CenterVertically, content = content)
 
 @Composable
-fun Num(label: String, v: String, mod: Modifier = Modifier, onChange: (String) -> Unit) =
-    OutlinedTextField(v, onChange, modifier = mod, label = { Text(label, fontSize = 11.sp) }, singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+fun Num(label: String, v: String, mod: Modifier = Modifier, onChange: (String) -> Unit) {
+    Column(mod) {
+        Text(label, fontSize = 10.sp, color = CColor.DarkGray)
+        BasicTextField(
+            v, onChange, singleLine = true,
+            textStyle = TextStyle(fontSize = 13.sp, color = CColor.Black),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth().height(28.dp).background(CColor.White, RoundedCornerShape(6.dp))
+                .border(1.dp, CColor(0xFF9E9E9E), RoundedCornerShape(6.dp)).padding(horizontal = 8.dp),
+            decorationBox = { inner -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) { inner() } }
+        )
+    }
+}
+
+@Composable
+fun Section(color: Long, content: @Composable ColumnScope.() -> Unit) =
+    Column(Modifier.fillMaxWidth().background(CColor(color), RoundedCornerShape(8.dp)).padding(6.dp), Arrangement.spacedBy(4.dp), content = content)
 
 @Composable
 fun PreviewBox(bm: Bitmap?) {
@@ -398,102 +414,119 @@ fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: ()
         else { st.wMm = f1((st.wPx.toFloatOrNull() ?: 2480f) * 25.4f / d).removeSuffix(".0"); st.hMm = f1((st.hPx.toFloatOrNull() ?: 3508f) * 25.4f / d).removeSuffix(".0") }
         st.unitPx = !st.unitPx
     }
+    fun swapOrientation() {
+        val a = st.wMm; st.wMm = st.hMm; st.hMm = a
+        val b = st.wPx; st.wPx = st.hPx; st.hPx = b
+    }
     val (pwPx, phPx) = paperPx(st)
     fun mmOf(px: Float) = f1(px / d * 25.4f)
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Image Resizer", style = MaterialTheme.typography.titleMedium)
-        HRow {
-            Btn("Upload Image") { onPick() }
-            Btn("Crop", false) { onCrop() }
-            Btn("Merge", false) { onMerge() }
-            Btn("Images to PDF", false) { onPdf() }
-        }
-        HRow {
-            Btn("Reset Image", false) { onReset() }
-            Btn("Clear Image", false) { onClear() }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // ----- tools (light teal) -----
+        Section(0xFFE0F7FA) {
+            Text("Image Resizer", style = MaterialTheme.typography.titleSmall)
+            HRow {
+                Btn("Upload Image") { onPick() }
+                Btn("Crop", false) { onCrop() }
+                Btn("Merge", false) { onMerge() }
+                Btn("Images to PDF", false) { onPdf() }
+                Btn("Reset Image", false) { onReset() }
+                Btn("Clear Image", false) { onClear() }
+            }
         }
 
-        // ----- size box: shows mm and px together; one button switches the input unit -----
-        Column(Modifier.fillMaxWidth().border(1.dp, CColor.Gray, RoundedCornerShape(8.dp)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("Required size (H x L)", style = MaterialTheme.typography.labelLarge)
+        // ----- required size (light blue) -----
+        Section(0xFFE3F2FD) {
+            Text("Required size (H x L)", fontSize = 11.sp)
             HRow { papers.forEach { p -> Chip(p.name, false) { setMm(p.w, p.h) } } }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Num(if (st.unitPx) "Height px" else "Height mm", if (st.unitPx) st.hPx else st.hMm, Modifier.weight(1f)) { if (st.unitPx) st.hPx = it else st.hMm = it }
                 Num(if (st.unitPx) "Length px" else "Length mm", if (st.unitPx) st.wPx else st.wMm, Modifier.weight(1f)) { if (st.unitPx) st.wPx = it else st.wMm = it }
-                Btn("mm / px", false) { toggleUnit() }
+                Num("DPI", st.dpi, Modifier.weight(0.7f)) { st.dpi = it }
             }
-            Text("H ${mmOf(phPx)} mm (${phPx.roundToInt()} px)   x   L ${mmOf(pwPx)} mm (${pwPx.roundToInt()} px)   @ ${d.roundToInt()} dpi", fontSize = 11.sp)
-            Num("DPI", st.dpi, Modifier.width(110.dp)) { st.dpi = it }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Btn(if (phPx >= pwPx) "Portrait" else "Landscape", false) { swapOrientation() }
+                Btn(if (st.unitPx) "Unit: px" else "Unit: mm", false) { toggleUnit() }
+            }
         }
 
-        HRow {
-            Chip("Professional resize", st.pro) { st.pro = true }
-            Chip("Normal (stretch)", !st.pro) { st.pro = false }
-            Chip("On paper", st.fit) { st.fit = true }
-            Chip("Image only", !st.fit) { st.fit = false }
-        }
-        if (st.pro && st.fit) HRow {
-            Text("Paper:", fontSize = 11.sp)
-            bgOptions.forEach { (n, c) -> Chip(n, st.bg == c) { st.bg = c } }
+        // ----- resize method + image size (light green) -----
+        Section(0xFFE8F5E9) {
+            HRow {
+                Chip("Professional resize", st.pro) { st.pro = true }
+                Chip("Normal (stretch)", !st.pro) { st.pro = false }
+                Chip("On paper", st.fit) { st.fit = true }
+                Chip("Image only", !st.fit) { st.fit = false }
+            }
+            if (st.pro && st.fit) HRow {
+                Text("Paper:", fontSize = 11.sp)
+                bgOptions.forEach { (n, c) -> Chip(n, st.bg == c) { st.bg = c } }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Btn("Fit") { st.pct = 100f; st.pctTxt = "100" }
+                Slider(st.pct.coerceIn(10f, 200f), { st.pct = it.roundToInt().toFloat(); st.pctTxt = st.pct.roundToInt().toString() },
+                    Modifier.weight(1f), valueRange = 10f..200f)
+                Num("Image size %", st.pctTxt, Modifier.width(70.dp)) { t -> st.pctTxt = t; t.toFloatOrNull()?.let { st.pct = it.coerceIn(1f, 400f) } }
+            }
         }
 
-        // ----- image size bar + number -----
-        Text("Image size (manual fix)", style = MaterialTheme.typography.labelLarge)
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Btn("Fit") { st.pct = 100f; st.pctTxt = "100" }
-            Slider(st.pct.coerceIn(10f, 200f), { st.pct = it.roundToInt().toFloat(); st.pctTxt = st.pct.roundToInt().toString() },
-                Modifier.weight(1f), valueRange = 10f..200f)
-            Num("%", st.pctTxt, Modifier.width(84.dp)) { t -> st.pctTxt = t; t.toFloatOrNull()?.let { st.pct = it.coerceIn(1f, 400f) } }
-        }
-
-        bmp?.let {
-            Text("Input size: Height ${it.height} px x Length ${it.width} px  (${mmOf(it.height.toFloat())} x ${mmOf(it.width.toFloat())} mm)",
-                style = MaterialTheme.typography.labelLarge)
-        }
-        HRow { listOf(20, 50, 100, 200, 500).forEach { Chip("$it KB", st.kb == it.toString()) { st.kb = it.toString() } } }
-        Text("Image Quality: ${st.q.toInt()}" + if (eff < 1f) "   (size reduced to ${(eff * 100).roundToInt()}%)" else "", fontSize = 12.sp)
-        Slider(st.q, { st.q = it }, valueRange = 1f..100f)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Num("Target KB", st.kb, Modifier.weight(1f)) { st.kb = it }
-            Btn("Compress") {
-                val b = bmp ?: return@Btn
-                val target = (st.kb.toIntOrNull() ?: max(1, origBytes / 2048)).coerceAtLeast(1)   // blank = 50% of original
-                scope.launch {
-                    val (qq, sc, bytes) = withContext(Dispatchers.Default) { compressFit(st, b, target * 1024) }
-                    if (st.fmt == "PNG") st.fmt = "JPEG"
-                    st.q = qq.toFloat(); st.cSig = sig; st.cScale = sc
-                    toast(ctx, "Compressed to ${bytes / 1024} KB")
+        // ----- compress (light orange) -----
+        Section(0xFFFFF3E0) {
+            bmp?.let {
+                Text("Input size: Height ${it.height} px x Length ${it.width} px  (${mmOf(it.height.toFloat())} x ${mmOf(it.width.toFloat())} mm)", fontSize = 11.sp)
+            }
+            HRow { listOf(20, 50, 100, 200, 500).forEach { Chip("$it KB", st.kb == it.toString()) { st.kb = it.toString() } } }
+            Text("Image Quality: ${st.q.toInt()}" + if (eff < 1f) "   (size reduced to ${(eff * 100).roundToInt()}%)" else "", fontSize = 11.sp)
+            Slider(st.q, { st.q = it }, valueRange = 1f..100f)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
+                Num("Target KB", st.kb, Modifier.width(110.dp)) { st.kb = it }
+                Btn("Compress") {
+                    val b = bmp ?: return@Btn
+                    val target = (st.kb.toIntOrNull() ?: max(1, origBytes / 2048)).coerceAtLeast(1)   // blank = 50% of original
+                    scope.launch {
+                        val (qq, sc, bytes) = withContext(Dispatchers.Default) { compressFit(st, b, target * 1024) }
+                        if (st.fmt == "PNG") st.fmt = "JPEG"
+                        st.q = qq.toFloat(); st.cSig = sig; st.cScale = sc
+                        toast(ctx, "Compressed to ${bytes / 1024} KB")
+                    }
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Column(Modifier.weight(1f)) {
-                Text("Before (original)", style = MaterialTheme.typography.labelMedium)
-                PreviewBox(bmp)
-                val w = bmp?.width ?: 0; val h = bmp?.height ?: 0
-                Text("H $h x L $w px\nH ${mmOf(h.toFloat())} x L ${mmOf(w.toFloat())} mm\n${f1(origBytes / 1024f)} KB", fontSize = 11.sp)
-            }
-            Column(Modifier.weight(1f)) {
-                Text("After (required)", style = MaterialTheme.typography.labelMedium)
-                PreviewBox(st.res?.first)
-                val w = st.res?.first?.width ?: 0; val h = st.res?.first?.height ?: 0
-                Text("H $h x L $w px\nH ${mmOf(h.toFloat())} x L ${mmOf(w.toFloat())} mm\n${f1((st.res?.second ?: 0) / 1024f)} KB", fontSize = 11.sp)
-            }
-        }
-        HRow { listOf("JPEG", "PNG", "JPG", "PDF").forEach { f -> Chip(if (f == "JPEG") "JPEG (default)" else f, st.fmt == f) { st.fmt = f } } }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Btn("Download") {
-                val r = st.res
-                if (r == null) toast(ctx, "Upload an image first")
-                else scope.launch {
-                    try { withContext(Dispatchers.IO) { save(ctx, r.first, st.fmt, st.q.toInt(), d) }; toast(ctx, "Saved to Download folder") }
-                    catch (e: Throwable) { toast(ctx, "Save failed: ${e.message}") }
+
+        // ----- before / after (light purple) -----
+        Section(0xFFF3E5F5) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("Before (original)", style = MaterialTheme.typography.labelMedium)
+                    PreviewBox(bmp)
+                    val w = bmp?.width ?: 0; val h = bmp?.height ?: 0
+                    Text("H $h x L $w px\nH ${mmOf(h.toFloat())} x L ${mmOf(w.toFloat())} mm\n${f1(origBytes / 1024f)} KB", fontSize = 11.sp)
+                }
+                Column(Modifier.weight(1f)) {
+                    Text("After (required)", style = MaterialTheme.typography.labelMedium)
+                    PreviewBox(st.res?.first)
+                    val w = st.res?.first?.width ?: 0; val h = st.res?.first?.height ?: 0
+                    Text("H $h x L $w px\nH ${mmOf(h.toFloat())} x L ${mmOf(w.toFloat())} mm\n${f1((st.res?.second ?: 0) / 1024f)} KB", fontSize = 11.sp)
                 }
             }
-            Btn("Exit", false) { onExit() }
         }
-        Text("@Prakash Pawar  Ver 1.0", Modifier.fillMaxWidth().padding(top = 8.dp), fontSize = 11.sp, color = CColor.Gray, textAlign = TextAlign.Center)
+
+        // ----- output (light yellow) -----
+        Section(0xFFFFFDE7) {
+            HRow { listOf("JPEG", "PNG", "JPG", "PDF").forEach { f -> Chip(if (f == "JPEG") "JPEG (default)" else f, st.fmt == f) { st.fmt = f } } }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Btn("Download") {
+                    val r = st.res
+                    if (r == null) toast(ctx, "Upload an image first")
+                    else scope.launch {
+                        try { withContext(Dispatchers.IO) { save(ctx, r.first, st.fmt, st.q.toInt(), d) }; toast(ctx, "Saved to Download folder") }
+                        catch (e: Throwable) { toast(ctx, "Save failed: ${e.message}") }
+                    }
+                }
+                Btn("Exit", false) { onExit() }
+            }
+        }
+        Text("@Prakash Pawar  Ver 1.0", Modifier.fillMaxWidth().padding(top = 4.dp), fontSize = 11.sp, color = CColor.Gray, textAlign = TextAlign.Center)
     }
 }
 
@@ -611,7 +644,7 @@ fun CropScreen(ctx: Context, bmp: Bitmap, cs: CS, onPick: () -> Unit, onBack: ()
         return out
     }
 
-    Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Column(Modifier.fillMaxSize().background(CColor(0xFFE0F2F1)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Btn("Back", false) { onBack() }
             Btn("Upload Image") { onPick() }
@@ -716,7 +749,7 @@ fun MergeScreen(ctx: Context, ms: MS, onAdd: () -> Unit, onBack: () -> Unit) {
             } catch (e: Throwable) { toast(ctx, "Save failed: ${e.message}") }
         }
     }
-    Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Column(Modifier.fillMaxSize().background(CColor(0xFFFFF8E1)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         HRow {
             Btn("Back", false) { onBack() }
             Btn("Add Images") { onAdd() }
@@ -791,7 +824,7 @@ fun MergeScreen(ctx: Context, ms: MS, onAdd: () -> Unit, onBack: () -> Unit) {
 @Composable
 fun PdfScreen(ctx: Context, ps: PS, onAdd: () -> Unit, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
-    Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Column(Modifier.fillMaxSize().background(CColor(0xFFFCE4EC)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         HRow {
             Btn("Back", false) { onBack() }
             Btn("Select Images") { onAdd() }
