@@ -49,6 +49,7 @@ import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
@@ -66,6 +68,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -227,6 +231,59 @@ fun Section(color: Long, content: @Composable ColumnScope.() -> Unit) =
     Column(Modifier.fillMaxWidth().background(CColor(color), RoundedCornerShape(8.dp)).padding(6.dp), Arrangement.spacedBy(4.dp), content = content)
 
 @Composable
+fun Drop(label: String, value: String, items: List<String>, onPick: (Int) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Surface(Modifier.clickable { open = true }, shape = RoundedCornerShape(6.dp), color = CColor.White,
+            border = BorderStroke(1.dp, CColor(0xFF9E9E9E))) {
+            Text("$label: $value  \u25BE", fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp))
+        }
+        DropdownMenu(open, { open = false }) {
+            items.forEachIndexed { i, t -> DropdownMenuItem({ Text(t, fontSize = 13.sp) }, { open = false; onPick(i) }) }
+        }
+    }
+}
+
+@Composable
+fun CSlider(v: Float, onChange: (Float) -> Unit, range: ClosedFloatingPointRange<Float>, mod: Modifier = Modifier) =
+    Slider(v, onChange, modifier = mod.requiredHeight(24.dp), valueRange = range)
+
+@Composable
+fun IndiaFlag(mod: Modifier) {
+    Canvas(mod) {
+        val h = size.height / 3
+        drawRect(CColor(0xFFFF9933), Offset(0f, 0f), Size(size.width, h))
+        drawRect(CColor.White, Offset(0f, h), Size(size.width, h))
+        drawRect(CColor(0xFF138808), Offset(0f, 2 * h), Size(size.width, h))
+        drawRect(CColor(0xFFBDBDBD), Offset.Zero, size, style = Stroke(2f))
+        val c = Offset(size.width / 2, size.height / 2); val r = h * 0.45f
+        val navy = CColor(0xFF000080)
+        drawCircle(navy, r, c, style = Stroke(3f))
+        for (i in 0 until 24) {
+            val ang = Math.toRadians(i * 15.0)
+            drawLine(navy, c, Offset(c.x + r * cos(ang).toFloat(), c.y + r * sin(ang).toFloat()), strokeWidth = 1.5f)
+        }
+        drawCircle(navy, r * 0.12f, c)
+    }
+}
+
+@Composable
+fun ByeScreen(onDone: () -> Unit) {
+    LaunchedEffect(Unit) { delay(2600); onDone() }
+    Column(Modifier.fillMaxSize().background(CColor.White), Arrangement.Center, Alignment.CenterHorizontally) {
+        IndiaFlag(Modifier.width(210.dp).height(140.dp))
+        Spacer(Modifier.height(16.dp))
+        Text("\u091C\u092F \u0939\u093F\u0902\u0926", fontSize = 34.sp, fontWeight = FontWeight.Bold, color = CColor(0xFFFF9933))
+        Text("Jai Hind", fontSize = 20.sp, color = CColor(0xFF138808))
+        Spacer(Modifier.height(18.dp))
+        Text("\u0927\u0928\u094D\u092F\u0935\u093E\u0926", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = CColor(0xFF000080))
+        Text("Thank You", fontSize = 18.sp, color = CColor(0xFF000080))
+        Spacer(Modifier.height(18.dp))
+        Text("@Prakash Pawar", fontSize = 15.sp, color = CColor.Gray)
+    }
+}
+
+@Composable
 fun PreviewBox(bm: Bitmap?) {
     Box(Modifier.fillMaxWidth().height(190.dp), contentAlignment = Alignment.Center) {
         if (bm != null) {
@@ -271,6 +328,15 @@ class MS {
     var pv by mutableStateOf(IntSize.Zero)
     val pw: Float get() = if (land) papers[paper].h else papers[paper].w
     val ph: Float get() = if (land) papers[paper].w else papers[paper].h
+    fun replaceAt(i: Int, nb: Bitmap) {
+        val old = rects[i]
+        bmps[i] = nb
+        if (auto) { relayout(); sel = i } else {
+            val k = min(old.width / nb.width, old.height / nb.height)
+            val w = nb.width * k; val h = nb.height * k; val c = old.center
+            rects[i] = Rect(c.x - w / 2, c.y - h / 2, c.x + w / 2, c.y + h / 2); sel = i
+        }
+    }
     fun relayout() { val l = autoLayout(bmps, pw, ph); rects.clear(); rects.addAll(l); sel = -1 }
 }
 
@@ -320,6 +386,8 @@ fun App(a: Activity) {
     var origOb by remember { mutableIntStateOf(0) }
     var screen by remember { mutableStateOf("resize") }
     var cs by remember { mutableStateOf(CS()) }
+    var mcs by remember { mutableStateOf(CS()) }
+    var cropIdx by remember { mutableIntStateOf(-1) }
     var rs by remember { mutableStateOf(RS()) }; var ms by remember { mutableStateOf(MS()) }; var ps by remember { mutableStateOf(PS()) }
     val scope = rememberCoroutineScope()
     val pick = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -334,17 +402,22 @@ fun App(a: Activity) {
     val pickPdf = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris -> ps.uris.addAll(uris) }
 
     // Back = go back (state is kept). On main screen, Back just sends the app to background.
-    BackHandler { if (screen != "resize") screen = "resize" else a.moveTaskToBack(true) }
+    BackHandler { if (screen == "bye") { } else if (screen == "mcrop") screen = "merge" else if (screen != "resize") screen = "resize" else a.moveTaskToBack(true) }
 
     Surface(Modifier.fillMaxSize().systemBarsPadding()) {
         val b = bmp
         when (screen) {
             "crop" -> {
-                if (b != null) CropScreen(a, b, cs, { pick.launch("image/*") }, { screen = "resize" }) {
+                if (b != null) CropScreen(a, b, cs, true, { pick.launch("image/*") }, { screen = "resize" }) {
                     bmp = it; ob = encode(it, "JPEG", 95).size; cs = CS(); screen = "resize"
                 }
             }
-            "merge" -> MergeScreen(a, ms, { pickMerge.launch("image/*") }) { screen = "resize" }
+            "merge" -> MergeScreen(a, ms, { pickMerge.launch("image/*") }, { i -> cropIdx = i; mcs = CS(); screen = "mcrop" }) { screen = "resize" }
+            "mcrop" -> {
+                val i = cropIdx
+                if (i in ms.bmps.indices) CropScreen(a, ms.bmps[i], mcs, false, {}, { screen = "merge" }) { nb -> ms.replaceAt(i, nb); screen = "merge" }
+            }
+            "bye" -> ByeScreen { a.finishAndRemoveTask() }
             "pdf" -> PdfScreen(a, ps, { pickPdf.launch("image/*") }) { screen = "resize" }
             else -> ResizerScreen(a, rs, b, ob, { pick.launch("image/*") },
                 { if (b != null) { screen = "crop" } else { toast(a, "Upload an image first") } },
@@ -358,7 +431,7 @@ fun App(a: Activity) {
                     cs = CS(); rs = RS(); ms = MS(); ps = PS()
                     toast(a, "Cleared")
                 },
-                { a.finishAndRemoveTask() })   // Exit = close and clear the app
+                { screen = "bye" })   // Exit = Jai Hind message, then close and clear the app
         }
     }
 }
@@ -420,6 +493,7 @@ fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: ()
     }
     val (pwPx, phPx) = paperPx(st)
     fun mmOf(px: Float) = f1(px / d * 25.4f)
+    val curName = papers.firstOrNull { pp -> (abs(pp.w - pwPx / d * 25.4f) < 0.5f && abs(pp.h - phPx / d * 25.4f) < 0.5f) || (abs(pp.h - pwPx / d * 25.4f) < 0.5f && abs(pp.w - phPx / d * 25.4f) < 0.5f) }?.name ?: "Custom"
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         // ----- tools (light teal) -----
@@ -438,7 +512,7 @@ fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: ()
         // ----- required size (light blue) -----
         Section(0xFFE3F2FD) {
             Text("Required size (H x L)", fontSize = 11.sp)
-            HRow { papers.forEach { p -> Chip(p.name, false) { setMm(p.w, p.h) } } }
+            Drop("Size", curName, papers.map { it.name }) { setMm(papers[it].w, papers[it].h) }
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Num(if (st.unitPx) "Height px" else "Height mm", if (st.unitPx) st.hPx else st.hMm, Modifier.weight(1f)) { if (st.unitPx) st.hPx = it else st.hMm = it }
                 Num(if (st.unitPx) "Length px" else "Length mm", if (st.unitPx) st.wPx else st.wMm, Modifier.weight(1f)) { if (st.unitPx) st.wPx = it else st.wMm = it }
@@ -458,14 +532,10 @@ fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: ()
                 Chip("On paper", st.fit) { st.fit = true }
                 Chip("Image only", !st.fit) { st.fit = false }
             }
-            if (st.pro && st.fit) HRow {
-                Text("Paper:", fontSize = 11.sp)
-                bgOptions.forEach { (n, c) -> Chip(n, st.bg == c) { st.bg = c } }
-            }
+            if (st.pro && st.fit) Drop("Paper color", bgOptions.firstOrNull { it.second == st.bg }?.first ?: "White", bgOptions.map { it.first }) { st.bg = bgOptions[it].second }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Btn("Fit") { st.pct = 100f; st.pctTxt = "100" }
-                Slider(st.pct.coerceIn(10f, 200f), { st.pct = it.roundToInt().toFloat(); st.pctTxt = st.pct.roundToInt().toString() },
-                    Modifier.weight(1f), valueRange = 10f..200f)
+                CSlider(st.pct.coerceIn(10f, 200f), { st.pct = it.roundToInt().toFloat(); st.pctTxt = st.pct.roundToInt().toString() }, 10f..200f, Modifier.weight(1f))
                 Num("Image size %", st.pctTxt, Modifier.width(70.dp)) { t -> st.pctTxt = t; t.toFloatOrNull()?.let { st.pct = it.coerceIn(1f, 400f) } }
             }
         }
@@ -476,8 +546,10 @@ fun ResizerScreen(ctx: Context, st: RS, bmp: Bitmap?, origBytes: Int, onPick: ()
                 Text("Input size: Height ${it.height} px x Length ${it.width} px  (${mmOf(it.height.toFloat())} x ${mmOf(it.width.toFloat())} mm)", fontSize = 11.sp)
             }
             HRow { listOf(20, 50, 100, 200, 500).forEach { Chip("$it KB", st.kb == it.toString()) { st.kb = it.toString() } } }
-            Text("Image Quality: ${st.q.toInt()}" + if (eff < 1f) "   (size reduced to ${(eff * 100).roundToInt()}%)" else "", fontSize = 11.sp)
-            Slider(st.q, { st.q = it }, valueRange = 1f..100f)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Quality ${st.q.toInt()}" + if (eff < 1f) " (size ${(eff * 100).roundToInt()}%)" else "", fontSize = 11.sp, modifier = Modifier.width(112.dp))
+                CSlider(st.q, { st.q = it }, 1f..100f, Modifier.weight(1f))
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
                 Num("Target KB", st.kb, Modifier.width(110.dp)) { st.kb = it }
                 Btn("Compress") {
@@ -582,7 +654,7 @@ fun Layer(img: Bitmap, s: Float, off: Offset, rot: Float, mod: Modifier) {
 }
 
 @Composable
-fun CropScreen(ctx: Context, bmp: Bitmap, cs: CS, onPick: () -> Unit, onBack: () -> Unit, onUse: (Bitmap) -> Unit) {
+fun CropScreen(ctx: Context, bmp: Bitmap, cs: CS, canUpload: Boolean, onPick: () -> Unit, onBack: () -> Unit, onUse: (Bitmap) -> Unit) {
     val scope = rememberCoroutineScope()
     var size by remember { mutableStateOf(IntSize.Zero) }
     val p = presets[cs.preset]
@@ -647,7 +719,7 @@ fun CropScreen(ctx: Context, bmp: Bitmap, cs: CS, onPick: () -> Unit, onBack: ()
     Column(Modifier.fillMaxSize().background(CColor(0xFFE0F2F1)).padding(8.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             Btn("Back", false) { onBack() }
-            Btn("Upload Image") { onPick() }
+            if (canUpload) Btn("Upload Image") { onPick() }
             Text("Input: H ${bmp.height} x L ${bmp.width} px", fontSize = 11.sp)
         }
         HRow {
@@ -713,9 +785,9 @@ fun CropScreen(ctx: Context, bmp: Bitmap, cs: CS, onPick: () -> Unit, onBack: ()
             }
         }
         Text(if (free) "Free transform: drag each corner separately." else "Drag corners / edges. Two fingers = zoom, move, rotate image.   Rotate: ${cs.rot.roundToInt()}°", fontSize = 11.sp)
-        Slider(cs.rot, { cs.rot = it }, valueRange = -180f..180f)
+        CSlider(cs.rot, { cs.rot = it }, -180f..180f)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Btn("Crop & Use in Resizer") { if (cs.quad.size == 4) onUse(makeCrop()) }
+            Btn("Crop & Use") { if (cs.quad.size == 4) onUse(makeCrop()) }
             Btn("Save", false) {
                 if (cs.quad.size == 4) scope.launch {
                     try { withContext(Dispatchers.Default) { save(ctx, makeCrop(), "JPEG", 95, 300f) }; toast(ctx, "Saved to Download folder") }
@@ -728,7 +800,7 @@ fun CropScreen(ctx: Context, bmp: Bitmap, cs: CS, onPick: () -> Unit, onBack: ()
 
 // ---------- Merge images on one paper ----------
 @Composable
-fun MergeScreen(ctx: Context, ms: MS, onAdd: () -> Unit, onBack: () -> Unit) {
+fun MergeScreen(ctx: Context, ms: MS, onAdd: () -> Unit, onCrop: (Int) -> Unit, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     fun scaleSel(f: Float) {
         val i = ms.sel
@@ -756,21 +828,19 @@ fun MergeScreen(ctx: Context, ms: MS, onAdd: () -> Unit, onBack: () -> Unit) {
             Btn("Clear", false) { ms.bmps.clear(); ms.rects.clear(); ms.sel = -1 }
         }
         HRow {
-            Text("Paper:", fontSize = 11.sp)
-            papers.forEachIndexed { i, p -> Chip(p.name, ms.paper == i) { ms.paper = i; ms.relayout() } }
-            Chip("Landscape", ms.land) { ms.land = !ms.land; ms.relayout() }
+            Drop("Paper", papers[ms.paper].name, papers.map { it.name }) { ms.paper = it; ms.relayout() }
+            Btn(if (ms.land) "Landscape" else "Portrait", false) { ms.land = !ms.land; ms.relayout() }
+            Drop("Color", bgOptions.firstOrNull { it.second == ms.bg }?.first ?: "White", bgOptions.map { it.first }) { ms.bg = bgOptions[it].second }
         }
         HRow {
-            Chip("Auto", ms.auto) { ms.auto = true; ms.relayout() }
-            Chip("Manual", !ms.auto) { ms.auto = false }
-            Text("Color:", fontSize = 11.sp)
-            bgOptions.forEach { (n, c) -> Chip(n, ms.bg == c) { ms.bg = c } }
+            Chip("Auto layout", ms.auto) { ms.auto = true; ms.relayout() }
+            Chip("Manual layout", !ms.auto) { ms.auto = false }
         }
         Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
             Box(Modifier.aspectRatio(ms.pw / ms.ph).background(CColor(ms.bg)).border(1.dp, CColor.Gray)
                 .onSizeChanged { ms.pv = it }
                 .pointerInput(ms.auto) {
-                    if (!ms.auto) awaitEachGesture {
+                    awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
                         val k = ms.pv.width / ms.pw
                         if (k <= 0f) return@awaitEachGesture
@@ -780,7 +850,7 @@ fun MergeScreen(ctx: Context, ms: MS, onAdd: () -> Unit, onBack: () -> Unit) {
                         do {
                             val ev = awaitPointerEvent()
                             val i = ms.sel
-                            if (hitIdx >= 0 && i in ms.rects.indices) {
+                            if (!ms.auto && hitIdx >= 0 && i in ms.rects.indices) {
                                 val z = ev.calculateZoom(); val pan = ev.calculatePan() / k
                                 val r = ms.rects[i]; val c = r.center + pan
                                 val w = r.width * z; val h = r.height * z
@@ -797,7 +867,7 @@ fun MergeScreen(ctx: Context, ms: MS, onAdd: () -> Unit, onBack: () -> Unit) {
                             dstOffset = IntOffset((r.left * k).roundToInt(), (r.top * k).roundToInt()),
                             dstSize = IntSize((r.width * k).roundToInt().coerceAtLeast(1), (r.height * k).roundToInt().coerceAtLeast(1)),
                             filterQuality = FilterQuality.Medium)
-                        if (i == ms.sel && !ms.auto) drawRect(CColor(0xFF1E88E5), Offset(r.left * k, r.top * k), Size(r.width * k, r.height * k), style = Stroke(3f))
+                        if (i == ms.sel) drawRect(CColor(0xFF1E88E5), Offset(r.left * k, r.top * k), Size(r.width * k, r.height * k), style = Stroke(3f))
                     }
                 }
             }
@@ -813,7 +883,11 @@ fun MergeScreen(ctx: Context, ms: MS, onAdd: () -> Unit, onBack: () -> Unit) {
             }
             Btn("Auto arrange", false) { ms.relayout() }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        HRow {
+            Btn("Crop", false) {
+                val i = if (ms.sel in ms.bmps.indices) ms.sel else if (ms.bmps.size == 1) 0 else -1
+                if (i >= 0) onCrop(i) else toast(ctx, "Tap an image on the paper to select it")
+            }
             Btn("Save Image") { export(false) }
             Btn("Save PDF") { export(true) }
         }
